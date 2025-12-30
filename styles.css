@@ -101,6 +101,90 @@ body {
     font-weight: 500;
     z-index: 1000;
     color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+#current-page {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 8px;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 500;
+    width: 50px;
+    text-align: center;
+    padding: 4px 8px;
+    outline: none;
+    appearance: textfield; /* Hide spinner */
+    -moz-appearance: textfield; /* Hide spinner in Firefox */
+}
+
+#current-page::-webkit-outer-spin-button,
+#current-page::-webkit-inner-spin-button {
+    -webkit-appearance: none; /* Hide spinner in Chrome/Safari */
+    margin: 0;
+}
+
+#current-page:focus {
+    border-color: rgba(255, 255, 255, 0.6);
+    background: rgba(255, 255, 255, 0.1);
+}
+
+#current-page:hover {
+    border-color: rgba(255, 255, 255, 0.5);
+}
+
+/* Chapter Indicator */
+#chapter-indicator-area {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1000;
+    min-width: 120px;
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+#chapter-indicator {
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(10px);
+    padding: 10px 20px;
+    border-radius: 25px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: opacity 0.3s ease, transform 0.3s ease;
+    text-align: center;
+    white-space: nowrap;
+}
+
+#chapter-indicator.hidden {
+    opacity: 0;
+    transform: translateY(10px);
+}
+
+#chapter-indicator-area:active #chapter-indicator {
+    transform: scale(0.95);
+}
+
+#chapter-indicator-area:active #chapter-indicator.hidden {
+    transform: translateY(10px) scale(0.95);
+}
+
+#current-chapter-number,
+#total-chapters {
+    font-weight: 500;
 }
 
 /* Swipe hint animation */
@@ -151,5 +235,72 @@ body {
     -webkit-user-select: none;
     -moz-user-select: none;
     -ms-user-select: none;
+}
+
+/* EPUB Upload UI */
+#upload-container {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+#upload-btn {
+    background: rgba(255, 255, 255, 0.2);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: #fff;
+    padding: 10px 20px;
+    border-radius: 20px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-family: inherit;
+}
+
+#upload-btn:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+#upload-btn:active {
+    transform: scale(0.95);
+}
+
+#upload-status {
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 12px;
+    padding: 5px 10px;
+    min-height: 20px;
+}
+
+#upload-container.hidden {
+    display: none;
+}
+
+/* Preserve EPUB paragraph formatting */
+.reel-text p {
+    margin-bottom: 1em;
+    text-indent: 1.5em; /* Preserve indentation */
+}
+
+.reel-text p:first-child {
+    text-indent: 0; /* First paragraph no indent */
+}
+
+.reel-text div {
+    margin-bottom: 1em;
+}
+
+.reel-text em,
+.reel-text i {
+    font-style: italic;
+}
+
+.reel-text strong,
+.reel-text b {
+    font-weight: 700;
 }
 

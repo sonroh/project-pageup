@@ -7,14 +7,35 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>PageUp - Text Reels</title>
     <link rel="stylesheet" href="styles.css">
+    <!-- JSZip library (required by epub.js) -->
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+    <!-- EPUB.js library -->
+    <script src="https://cdn.jsdelivr.net/npm/epubjs@0.3.88/dist/epub.min.js"></script>
 </head>
 <body>
     <div id="app">
+        <!-- EPUB Upload Button -->
+        <div id="upload-container">
+            <input type="file" id="epub-input" accept=".epub" style="display: none;">
+            <button id="upload-btn">Upload EPUB</button>
+            <div id="upload-status"></div>
+        </div>
+        
         <div id="reels-container">
             <!-- Reels will be dynamically inserted here -->
         </div>
         <div id="progress-indicator">
-            <span id="current-page">1</span> / <span id="total-pages">1</span>
+            <input type="number" id="current-page" value="1" min="1" step="1">
+            <span> / </span>
+            <span id="total-pages">1</span>
+        </div>
+        <div id="chapter-indicator-area">
+            <div id="chapter-indicator" class="hidden">
+                <span>Chapter </span>
+                <span id="current-chapter-number">1</span>
+                <span> / </span>
+                <span id="total-chapters">1</span>
+            </div>
         </div>
     </div>
     <script src="script.js"></script>
