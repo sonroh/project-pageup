@@ -6,6 +6,186 @@ let chapterMetadata = {
     totalChapters: 0
 };
 
+// LocalStorage helper functions for saving/loading reading position
+const StorageManager = {
+    savePosition(epubIdentifier, pageIndex) {
+        const data = {
+            epubIdentifier: epubIdentifier,
+            pageIndex: pageIndex,
+            timestamp: Date.now()
+        };
+        localStorage.setItem('pageup-reading-position', JSON.stringify(data));
+    },
+
+    loadPosition() {
+        const saved = localStorage.getItem('pageup-reading-position');
+        return saved ? JSON.parse(saved) : null;
+    },
+
+    clearPosition() {
+        localStorage.removeItem('pageup-reading-position');
+    },
+
+    // Create identifier from file (filename + size + lastModified)
+    createEpubIdentifier(file) {
+        return `${file.name}-${file.size}-${file.lastModified}`;
+    },
+    
+    // Analytics tracking
+    saveAnalytics(epubIdentifier, sessionData) {
+        const key = `pageup-analytics-${epubIdentifier}`;
+        let analytics = JSON.parse(localStorage.getItem(key) || '{"sessions": []}');
+        analytics.sessions.push(sessionData);
+        localStorage.setItem(key, JSON.stringify(analytics));
+    },
+    
+    getAnalytics(epubIdentifier) {
+        const key = `pageup-analytics-${epubIdentifier}`;
+        return JSON.parse(localStorage.getItem(key) || '{"sessions": []}');
+    }
+};
+
+// Analytics Tracker
+class AnalyticsTracker {
+    constructor() {
+        this.sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        this.sessionStartTime = null;
+        this.pageTimes = []; // Array of {pageIndex, startTime, endTime, duration, density}
+        this.currentPageStartTime = null;
+        this.pagesRead = new Set(); // Track unique pages viewed
+        this.readThreshold = 2000; // 2 seconds to count as "read"
+        
+        // Track time spent in each density setting
+        this.densityTimeTracking = {
+            less: { startTime: null, totalTime: 0 },
+            medium: { startTime: null, totalTime: 0 },
+            more: { startTime: null, totalTime: 0 }
+        };
+        this.currentDensity = 'medium';
+    }
+    
+    startSession() {
+        this.sessionStartTime = Date.now();
+        // Start tracking current density
+        this.densityTimeTracking[this.currentDensity].startTime = this.sessionStartTime;
+    }
+    
+    startPage(pageIndex, density) {
+        // End previous page if exists
+        if (this.currentPageStartTime !== null && this.pageTimes.length > 0) {
+            const lastEntry = this.pageTimes[this.pageTimes.length - 1];
+            if (lastEntry.endTime === null) {
+                lastEntry.endTime = Date.now();
+                lastEntry.duration = lastEntry.endTime - lastEntry.startTime;
+                
+                // Mark as read if duration > threshold
+                if (lastEntry.duration >= this.readThreshold) {
+                    this.pagesRead.add(lastEntry.pageIndex);
+                }
+            }
+        }
+        
+        // Handle density change
+        if (density !== this.currentDensity) {
+            // End tracking for previous density
+            if (this.densityTimeTracking[this.currentDensity].startTime !== null) {
+                const endTime = Date.now();
+                const duration = endTime - this.densityTimeTracking[this.currentDensity].startTime;
+                this.densityTimeTracking[this.currentDensity].totalTime += duration;
+                this.densityTimeTracking[this.currentDensity].startTime = null;
+            }
+            
+            // Start tracking new density
+            this.currentDensity = density;
+            this.densityTimeTracking[this.currentDensity].startTime = Date.now();
+        }
+        
+        // Start tracking new page
+        this.currentPageStartTime = Date.now();
+        this.pageTimes.push({
+            pageIndex: pageIndex,
+            startTime: this.currentPageStartTime,
+            endTime: null,
+            duration: 0,
+            density: density
+        });
+    }
+    
+    endSession() {
+        // Finalize current page
+        if (this.currentPageStartTime !== null && this.pageTimes.length > 0) {
+            const lastEntry = this.pageTimes[this.pageTimes.length - 1];
+            if (lastEntry.endTime === null) {
+                lastEntry.endTime = Date.now();
+                lastEntry.duration = lastEntry.endTime - lastEntry.startTime;
+                
+                if (lastEntry.duration >= this.readThreshold) {
+                    this.pagesRead.add(lastEntry.pageIndex);
+                }
+            }
+        }
+        
+        // Finalize current density tracking
+        if (this.densityTimeTracking[this.currentDensity].startTime !== null) {
+            const endTime = Date.now();
+            const duration = endTime - this.densityTimeTracking[this.currentDensity].startTime;
+            this.densityTimeTracking[this.currentDensity].totalTime += duration;
+            this.densityTimeTracking[this.currentDensity].startTime = null;
+        }
+        
+        // Calculate average time per page
+        const validPages = this.pageTimes.filter(pt => pt.duration > 0);
+        const avgTime = validPages.length > 0
+            ? Math.round(validPages.reduce((sum, pt) => sum + pt.duration, 0) / validPages.length / 1000) // in seconds
+            : 0;
+        
+        // Get last page index
+        const lastPageIndex = this.pageTimes.length > 0 
+            ? this.pageTimes[this.pageTimes.length - 1].pageIndex 
+            : 0;
+        
+        // Calculate total time spent reading (sum of all page durations)
+        const totalReadingTime = Math.round(validPages.reduce((sum, pt) => sum + pt.duration, 0) / 1000); // in seconds
+        
+        // Get time spent in each density (convert from ms to seconds)
+        const timeInLess = Math.round(this.densityTimeTracking.less.totalTime / 1000);
+        const timeInMedium = Math.round(this.densityTimeTracking.medium.totalTime / 1000);
+        const timeInMore = Math.round(this.densityTimeTracking.more.totalTime / 1000);
+        
+        return {
+            sessionId: this.sessionId,
+            sessionStartTimestamp: this.sessionStartTime ? new Date(this.sessionStartTime).toISOString() : new Date().toISOString(),
+            sessionEndTimestamp: new Date().toISOString(),
+            totalPagesRead: this.pagesRead.size,
+            lastPageIndex: lastPageIndex,
+            totalPages: textChunks.length,
+            progressPercentage: textChunks.length > 1 
+                ? parseFloat(((lastPageIndex / (textChunks.length - 1)) * 100).toFixed(2))
+                : (textChunks.length === 1 ? 100.00 : 0.00),
+            averageTimePerPage: avgTime,
+            totalTimeSpentReading: totalReadingTime,
+            lastPageSizeSetting: this.currentDensity,
+            timeSpentInLess: timeInLess,
+            timeSpentInMedium: timeInMedium,
+            timeSpentInMore: timeInMore
+        };
+    }
+    
+    reset() {
+        this.sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        this.sessionStartTime = null;
+        this.pageTimes = [];
+        this.currentPageStartTime = null;
+        this.pagesRead = new Set();
+        this.densityTimeTracking = {
+            less: { startTime: null, totalTime: 0 },
+            medium: { startTime: null, totalTime: 0 },
+            more: { startTime: null, totalTime: 0 }
+        };
+        this.currentDensity = 'medium';
+    }
+}
+
 // EPUB Parser
 class EPUBParser {
     constructor() {
@@ -78,6 +258,16 @@ class EPUBParser {
                     // Get the href
                     const href = item.href || item.idref || item.url || item;
                     
+                    // Extract chapter number from idref if available (e.g., "chapter-3" -> 3)
+                    let chapterNumberFromIdref = null;
+                    if (item.idref) {
+                        const idrefMatch = item.idref.match(/chapter[_-]?(\d+)/i);
+                        if (idrefMatch) {
+                            chapterNumberFromIdref = parseInt(idrefMatch[1], 10);
+                            console.log(`Extracted chapter number ${chapterNumberFromIdref} from idref: ${item.idref}`);
+                        }
+                    }
+                    
                     // Load the section - try different methods
                     let htmlContent = '';
                     
@@ -135,11 +325,46 @@ class EPUBParser {
                     // Extract text content, preserving structure
                     const textContent = this.extractFormattedText(doc.body);
                     if (textContent.trim()) {
-                        const title = item.label || item.title || `Chapter ${i + 1}`;
-                        chapters.push({
-                            title: title,
-                            content: textContent
-                        });
+                        // Check if this is a table of contents or front matter
+                        const textLower = textContent.toLowerCase();
+                        const isTableOfContents = textLower.includes('contents') || 
+                                                 textLower.includes('table of contents') ||
+                                                 textLower.includes('toc') ||
+                                                 (doc.body.querySelectorAll('a').length > 10); // Many links = likely TOC
+                        
+                        const isFrontMatter = textLower.includes('project gutenberg') ||
+                                             textLower.includes('ebook') ||
+                                             textLower.includes('copyright') ||
+                                             textLower.includes('license') ||
+                                             href.toLowerCase().includes('title') ||
+                                             href.toLowerCase().includes('cover') ||
+                                             href.toLowerCase().includes('copyright') ||
+                                             (item.idref && (item.idref.toLowerCase().includes('cover') ||
+                                             item.idref.toLowerCase().includes('header')));
+                        
+                        // Skip TOC and front matter pages
+                        if (isTableOfContents || isFrontMatter) {
+                            // Still include the content, but don't treat it as a chapter with a title
+                            chapters.push({
+                                title: null, // No title for TOC/front matter
+                                content: textContent,
+                                isMetadata: true,
+                                chapterNumberFromIdref: null // No chapter number for metadata
+                            });
+                        } else {
+                            // Only assign chapter title if EPUB provides a meaningful label
+                            // Don't auto-generate "Chapter X" - it's often wrong
+                            const title = (item.label && item.label.trim() && 
+                                         !item.label.match(/^(chapter|ch)\s*\d+$/i)) 
+                                         ? item.label 
+                                         : null;
+                            chapters.push({
+                                title: title,
+                                content: textContent,
+                                isMetadata: false,
+                                chapterNumberFromIdref: chapterNumberFromIdref // Store extracted chapter number
+                            });
+                        }
                     }
                 } catch (error) {
                     console.warn(`Error loading chapter ${i + 1}:`, error);
@@ -159,6 +384,87 @@ class EPUBParser {
         } catch (error) {
             console.error('Error extracting text:', error);
             throw error;
+        }
+    }
+
+    async diagnoseEPUB() {
+        if (!this.book) return null;
+        
+        try {
+            await this.book.ready;
+            
+            const diagnosis = {
+                metadata: {},
+                spine: [],
+                navigation: null,
+                toc: null
+            };
+            
+            // Get metadata
+            try {
+                const metadata = this.book.packaging?.metadata || this.book.metadata || this.book.loaded?.metadata || {};
+                diagnosis.metadata = {
+                    title: metadata.title,
+                    creator: metadata.creator,
+                    language: metadata.language,
+                    publisher: metadata.publisher,
+                    all: metadata
+                };
+            } catch (e) {
+                console.warn('Could not get metadata:', e);
+            }
+            
+            // Get spine information
+            let spine;
+            if (this.book.spine) {
+                spine = this.book.spine;
+            } else if (this.book.loaded && this.book.loaded.spine) {
+                spine = this.book.loaded.spine;
+            }
+            
+            if (spine) {
+                const spineLength = spine.length || spine.spineItems?.length || 0;
+                for (let i = 0; i < spineLength; i++) {
+                    let item;
+                    if (spine.get) {
+                        item = spine.get(i);
+                    } else if (spine.spineItems) {
+                        item = spine.spineItems[i];
+                    } else if (Array.isArray(spine)) {
+                        item = spine[i];
+                    } else {
+                        item = spine[i];
+                    }
+                    
+                    if (item) {
+                        diagnosis.spine.push({
+                            index: i,
+                            href: item.href || item.idref || item.url,
+                            label: item.label,
+                            title: item.title,
+                            idref: item.idref,
+                            fullItem: item
+                        });
+                    }
+                }
+            }
+            
+            // Try to get navigation/TOC
+            try {
+                if (this.book.navigation) {
+                    diagnosis.navigation = this.book.navigation;
+                }
+                if (this.book.loaded && this.book.loaded.navigation) {
+                    diagnosis.navigation = this.book.loaded.navigation;
+                }
+            } catch (e) {
+                console.warn('Could not get navigation:', e);
+            }
+            
+            return diagnosis;
+        } catch (error) {
+            console.error('Diagnosis error:', error);
+            return null;
         }
     }
 
@@ -182,22 +488,26 @@ class EPUBParser {
                     continue;
                 }
                 
-                // Preserve paragraph breaks
+                // Preserve paragraph breaks with styles
                 if (tagName === 'p') {
                     const paraContent = this.extractFormattedText(child).trim();
                     if (paraContent) {
-                        html += '<p>' + paraContent + '</p>';
+                        const style = child.getAttribute('style') || '';
+                        const classAttr = child.getAttribute('class') ? `class="${child.getAttribute('class')}"` : '';
+                        html += `<p ${classAttr} ${style ? `style="${style}"` : ''}>${paraContent}</p>`;
                     }
                 }
                 // Preserve line breaks
                 else if (tagName === 'br') {
                     html += '<br>';
                 }
-                // Preserve divs (often used for paragraphs in EPUBs)
+                // Preserve divs (often used for paragraphs in EPUBs) with styles
                 else if (tagName === 'div') {
                     const divContent = this.extractFormattedText(child).trim();
                     if (divContent) {
-                        html += '<div>' + divContent + '</div>';
+                        const style = child.getAttribute('style') || '';
+                        const classAttr = child.getAttribute('class') ? `class="${child.getAttribute('class')}"` : '';
+                        html += `<div ${classAttr} ${style ? `style="${style}"` : ''}>${divContent}</div>`;
                     }
                 }
                 // Preserve emphasis
@@ -207,16 +517,40 @@ class EPUBParser {
                 else if (tagName === 'strong' || tagName === 'b') {
                     html += '<strong>' + this.extractFormattedText(child) + '</strong>';
                 }
-                // Handle headings
+                // Preserve spans with styles (for font sizes, colors, etc.)
+                else if (tagName === 'span') {
+                    const style = child.getAttribute('style') || '';
+                    const classAttr = child.getAttribute('class') ? `class="${child.getAttribute('class')}"` : '';
+                    const spanContent = this.extractFormattedText(child);
+                    if (style || classAttr) {
+                        html += `<span ${classAttr} ${style ? `style="${style}"` : ''}>${spanContent}</span>`;
+                    } else {
+                        html += spanContent;
+                    }
+                }
+                // Preserve headings with their original tags (for proper sizing)
                 else if (['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tagName)) {
                     const headingContent = this.extractFormattedText(child).trim();
                     if (headingContent) {
-                        html += '<p style="font-weight: bold; margin-bottom: 1em;">' + headingContent + '</p>';
+                        // Preserve the heading tag and any inline styles
+                        const style = child.getAttribute('style') || '';
+                        const classAttr = child.getAttribute('class') ? `class="${child.getAttribute('class')}"` : '';
+                        html += `<${tagName} ${classAttr} ${style ? `style="${style}"` : ''}>${headingContent}</${tagName}>`;
                     }
                 }
-                // Handle spans and other inline elements
-                else if (['span', 'a', 'small', 'sub', 'sup'].includes(tagName)) {
-                    html += this.extractFormattedText(child);
+                // Handle links with href
+                else if (tagName === 'a') {
+                    const href = child.getAttribute('href') || '';
+                    const linkContent = this.extractFormattedText(child);
+                    if (href) {
+                        html += `<a href="${href}">${linkContent}</a>`;
+                    } else {
+                        html += linkContent;
+                    }
+                }
+                // Handle other inline elements
+                else if (['small', 'sub', 'sup', 'u', 'mark'].includes(tagName)) {
+                    html += `<${tagName}>${this.extractFormattedText(child)}</${tagName}>`;
                 }
                 // Handle block elements
                 else if (['section', 'article', 'main'].includes(tagName)) {
@@ -239,6 +573,7 @@ class EPUBParser {
         const chunks = [];
         let chunkId = 1;
         const chapterInfo = [];
+        let actualChapterNumber = 0; // Track actual chapters (excluding metadata)
 
         chapters.forEach((chapter, chapterIndex) => {
             if (!chapter.content || !chapter.content.trim()) {
@@ -246,6 +581,27 @@ class EPUBParser {
             }
 
             const chapterStartIndex = chunks.length; // Track where this chapter starts
+            
+            // Skip metadata pages (TOC, front matter) when tracking chapters
+            const isMetadataPage = chapter.isMetadata === true;
+            
+            // Determine the chapter number to use
+            let chapterNumberToUse = null;
+            
+            if (!isMetadataPage) {
+                // If we have a chapter number from idref, use it
+                if (chapter.chapterNumberFromIdref !== null && chapter.chapterNumberFromIdref !== undefined) {
+                    chapterNumberToUse = chapter.chapterNumberFromIdref;
+                    // Update actualChapterNumber to match if it's higher (for tracking max)
+                    if (chapterNumberToUse > actualChapterNumber) {
+                        actualChapterNumber = chapterNumberToUse;
+                    }
+                } else {
+                    // Fallback: increment our counter
+                    actualChapterNumber++;
+                    chapterNumberToUse = actualChapterNumber;
+                }
+            }
 
             // Parse HTML to extract paragraphs in order
             const parser = new DOMParser();
@@ -296,7 +652,9 @@ class EPUBParser {
             }
             
             let currentChunk = '';
-            let currentTitle = chapter.title;
+            // Only use title if chapter has one and it's not a metadata page
+            let currentTitle = (!isMetadataPage && chapter.title) ? chapter.title : null;
+            let isFirstChunkOfChapter = true; // Track if this is the first chunk
 
             // Helper function to split text by sentences
             const splitBySentences = (text) => {
@@ -385,13 +743,14 @@ class EPUBParser {
                             // Save current chunk
                             chunks.push({
                                 id: chunkId++,
-                                title: currentTitle,
+                                title: isFirstChunkOfChapter ? currentTitle : null,
                                 chapterIndex: chapterIndex,
+                                actualChapterNumber: chapterNumberToUse, // Use the extracted/calculated chapter number
                                 chapterTitle: chapter.title,
                                 text: currentChunk.trim()
                             });
                             currentChunk = '';
-                            currentTitle = null;
+                            isFirstChunkOfChapter = false; // Subsequent chunks don't get title
                         }
                         
                         // Add this part to current chunk
@@ -404,13 +763,14 @@ class EPUBParser {
                         // Save current chunk before it gets too long
                         chunks.push({
                             id: chunkId++,
-                            title: currentTitle,
+                            title: isFirstChunkOfChapter ? currentTitle : null,
                             chapterIndex: chapterIndex,
+                            actualChapterNumber: chapterNumberToUse, // Use the extracted/calculated chapter number
                             chapterTitle: chapter.title,
                             text: currentChunk.trim()
                         });
                         currentChunk = '';
-                        currentTitle = null; // Only show title on first chunk of chapter
+                        isFirstChunkOfChapter = false; // Subsequent chunks don't get title
                     }
                     
                     // Add paragraph with formatting preserved
@@ -422,29 +782,55 @@ class EPUBParser {
             if (currentChunk.trim()) {
                 chunks.push({
                     id: chunkId++,
-                    title: currentTitle,
+                    title: isFirstChunkOfChapter ? currentTitle : null,
                     chapterIndex: chapterIndex,
+                    actualChapterNumber: chapterNumberToUse, // Use the extracted/calculated chapter number
                     chapterTitle: chapter.title,
                     text: currentChunk.trim()
                 });
             }
 
-            // Track chapter metadata
-            const chapterEndIndex = chunks.length - 1;
-            if (chapterStartIndex <= chapterEndIndex) {
-                chapterInfo.push({
-                    title: chapter.title,
-                    startIndex: chapterStartIndex,
-                    endIndex: chapterEndIndex
-                });
+            // Track chapter metadata (skip metadata pages like TOC)
+            if (!isMetadataPage) {
+                const chapterEndIndex = chunks.length - 1;
+                if (chapterStartIndex <= chapterEndIndex) {
+                    // Only add chapter info if we actually created chunks
+                    if (chunks.length > chapterStartIndex) {
+                    chapterInfo.push({
+                        title: chapter.title,
+                        startIndex: chapterStartIndex,
+                        endIndex: chapterEndIndex,
+                        chapterNumber: chapterNumberToUse // Use the extracted/calculated chapter number
+                    });
+                    }
+                }
             }
         });
 
         // Store chapter metadata globally
+        // Calculate totalChapters as the maximum chapter number (not just count)
+        // This handles cases where chapters are numbered 3, 5, 7, 8 instead of 1, 2, 3, 4
+        let maxChapterNumber = 0;
+        chapterInfo.forEach(ch => {
+            if (ch.chapterNumber && ch.chapterNumber > maxChapterNumber) {
+                maxChapterNumber = ch.chapterNumber;
+            }
+        });
+        
+        // If no chapters found or all are null, use count as fallback
+        const totalChapters = maxChapterNumber > 0 ? maxChapterNumber : chapterInfo.length;
+        
         chapterMetadata = {
             chapters: chapterInfo,
-            totalChapters: chapterInfo.length
+            totalChapters: totalChapters
         };
+        
+        console.log('Chapter metadata:', {
+            chapterCount: chapterInfo.length,
+            maxChapterNumber: maxChapterNumber,
+            totalChapters: totalChapters,
+            chapters: chapterInfo.map(ch => ({ number: ch.chapterNumber, title: ch.title }))
+        });
 
         return chunks;
     }
@@ -460,6 +846,30 @@ class TextReels {
         this.currentDragY = 0;
         this.minSwipeDistance = 50;
         this.threshold = 100; // Distance needed to trigger page change
+        this.currentEpubIdentifier = null; // Track which EPUB is currently loaded
+        this.originalChapters = null; // Store original chapters for re-chunking
+        this.currentDensity = 'medium'; // Current text density: 'less', 'medium', 'more'
+        this.parser = null; // Store parser instance for re-chunking
+        this.analyticsTracker = new AnalyticsTracker();
+        
+        // Google Forms configuration
+        this.googleFormId = '1FAIpQLScfogpt4UwmRULcF6mw5m_jrLfJ1RTduyGFX-1we8n-Qrdo5g';
+        this.googleFormEntryIds = {
+            sessionId: 'entry.453262883',
+            sessionStartTimestamp: 'entry.779014196',
+            sessionEndTimestamp: 'entry.1267759225',
+            totalPagesRead: 'entry.890030520',
+            lastPageIndex: 'entry.2011441323',
+            totalPages: 'entry.492070347',
+            progressPercentage: 'entry.1207501572',
+            averageTimePerPage: 'entry.1771254717',
+            totalTimeSpentReading: 'entry.1591503276',
+            lastPageSizeSetting: 'entry.351585333',
+            timeSpentInLess: 'entry.276628545',
+            timeSpentInMedium: 'entry.948659475',
+            timeSpentInMore: 'entry.1683789704',
+            deviceType: 'entry.110755807'
+        };
         
         this.init();
     }
@@ -503,7 +913,7 @@ class TextReels {
         textChunks.forEach((chunk, index) => {
             const reelItem = document.createElement('div');
             reelItem.className = 'reel-item';
-            if (index === 0) reelItem.classList.add('active');
+            if (index === this.currentIndex) reelItem.classList.add('active');
             
             reelItem.innerHTML = `
                 <div class="text-container">
@@ -696,6 +1106,9 @@ class TextReels {
         items[this.currentIndex].classList.remove('next');
         items[this.currentIndex].classList.add('active');
         
+        // Track page view
+        this.analyticsTracker.startPage(this.currentIndex, this.currentDensity);
+        
         this.updateProgress();
         
         setTimeout(() => {
@@ -738,6 +1151,9 @@ class TextReels {
         items[this.currentIndex].style.transform = '';
         items[this.currentIndex].style.opacity = '';
         
+        // Track page view
+        this.analyticsTracker.startPage(this.currentIndex, this.currentDensity);
+        
         this.updateProgress();
         
         setTimeout(() => {
@@ -757,6 +1173,11 @@ class TextReels {
             currentPageInput.max = textChunks.length;
         }
         this.updateChapterIndicator();
+        
+        // Save position if EPUB is loaded
+        if (this.currentEpubIdentifier && textChunks.length > 0) {
+            StorageManager.savePosition(this.currentEpubIdentifier, this.currentIndex);
+        }
     }
 
     updateChapterIndicator() {
@@ -780,17 +1201,24 @@ class TextReels {
             return;
         }
 
-        // Get chapter info from chunk or find it
-        let chapterIndex = currentChunk.chapterIndex;
-        if (chapterIndex === undefined) {
+        // Get chapter info from chunk - use actualChapterNumber if available
+        let chapterNum = null;
+        
+        if (currentChunk.actualChapterNumber !== null && currentChunk.actualChapterNumber !== undefined) {
+            // Use the actual chapter number (excluding metadata)
+            chapterNum = currentChunk.actualChapterNumber;
+        } else {
             // Fallback: find chapter by checking which chapter range contains currentIndex
-            chapterIndex = chapterMetadata.chapters.findIndex(ch => 
+            const chapterInfo = chapterMetadata.chapters.find(ch => 
                 this.currentIndex >= ch.startIndex && this.currentIndex <= ch.endIndex
             );
+            if (chapterInfo) {
+                chapterNum = chapterInfo.chapterNumber;
+            }
         }
 
-        if (chapterIndex >= 0 && chapterIndex < chapterMetadata.chapters.length) {
-            currentChapterNumber.textContent = chapterIndex + 1;
+        if (chapterNum !== null && chapterNum > 0) {
+            currentChapterNumber.textContent = chapterNum;
             totalChapters.textContent = chapterMetadata.totalChapters;
             // Update content but don't change visibility (respect user's toggle)
         } else {
@@ -859,6 +1287,9 @@ class TextReels {
         items[this.currentIndex].style.transform = '';
         items[this.currentIndex].style.opacity = '';
         
+        // Track page view
+        this.analyticsTracker.startPage(this.currentIndex, this.currentDensity);
+        
         this.updateProgress();
         
         setTimeout(() => {
@@ -899,9 +1330,24 @@ class TextReels {
             }
 
             const parser = new EPUBParser();
+            this.parser = parser; // Store parser for re-chunking
             statusEl.textContent = 'Parsing EPUB structure...';
             
             await parser.loadEPUB(file);
+            statusEl.textContent = 'Analyzing EPUB structure...';
+            
+            // Run diagnosis to see what information is available
+            const diagnosis = await parser.diagnoseEPUB();
+            if (diagnosis) {
+                console.log('=== EPUB DIAGNOSIS ===');
+                console.log('Metadata:', diagnosis.metadata);
+                console.log('Total spine items:', diagnosis.spine.length);
+                console.log('Spine items (first 10):', diagnosis.spine.slice(0, 10));
+                console.log('All spine items:', diagnosis.spine);
+                console.log('Navigation/TOC:', diagnosis.navigation);
+                console.log('========================');
+            }
+            
             statusEl.textContent = 'Extracting text from chapters...';
             
             const chapters = await parser.extractText();
@@ -910,22 +1356,61 @@ class TextReels {
                 throw new Error('No text content found in EPUB. The file might be corrupted or empty.');
             }
             
+            // Store original chapters for re-chunking
+            this.originalChapters = chapters;
+            
+            // Load density preference from localStorage
+            const savedDensity = localStorage.getItem('pageup-text-density');
+            if (savedDensity && ['less', 'medium', 'more'].includes(savedDensity)) {
+                this.currentDensity = savedDensity;
+            }
+            
+            // Get chunk size based on density
+            const chunkSize = this.getChunkSizeForDensity(this.currentDensity);
+            
             statusEl.textContent = `Processing ${chapters.length} chapters...`;
             
-            const chunks = parser.chunkText(chapters, 400); // 400 chars per chunk
+            const chunks = parser.chunkText(chapters, chunkSize);
             
             if (chunks.length === 0) {
                 throw new Error('No readable content found in EPUB.');
+            }
+            
+            // Create identifier for this EPUB
+            const epubIdentifier = StorageManager.createEpubIdentifier(file);
+            this.currentEpubIdentifier = epubIdentifier;
+            
+            // Check if we have a saved position for this EPUB
+            const savedPosition = StorageManager.loadPosition();
+            let startIndex = 0;
+            let restoredPosition = false;
+            
+            if (savedPosition && savedPosition.epubIdentifier === epubIdentifier) {
+                // Same EPUB - restore position
+                startIndex = savedPosition.pageIndex;
+                if (startIndex >= chunks.length) {
+                    startIndex = 0; // Safety check - position might be invalid
+                } else if (startIndex > 0) {
+                    restoredPosition = true;
+                }
             }
             
             // Update textChunks
             textChunks.length = 0;
             textChunks.push(...chunks);
             
-            // Re-render
-            this.currentIndex = 0;
+            // Reset and start analytics tracking
+            this.analyticsTracker.reset();
+            this.analyticsTracker.currentDensity = this.currentDensity;
+            this.analyticsTracker.startSession();
+            
+            // Re-render starting at saved position
+            this.currentIndex = startIndex;
             this.renderReels();
             this.updateProgress();
+            
+            // Start tracking initial page view
+            this.analyticsTracker.startPage(this.currentIndex, this.currentDensity);
             
             // Show chapter indicator by default when EPUB is loaded
             const chapterIndicator = document.getElementById('chapter-indicator');
@@ -933,9 +1418,28 @@ class TextReels {
                 chapterIndicator.classList.remove('hidden');
             }
             
+            // Show density control and update buttons
+            const densityControl = document.getElementById('density-control');
+            if (densityControl) {
+                densityControl.classList.remove('hidden');
+                this.updateDensityButtons();
+            }
+            
+            // Show Done Reading button
+            const doneReadingBtn = document.getElementById('done-reading-btn');
+            if (doneReadingBtn) {
+                doneReadingBtn.style.display = 'inline-block';
+            }
+            
             // Hide upload button
             document.getElementById('upload-container').classList.add('hidden');
-            statusEl.textContent = `✓ Loaded ${chunks.length} chunks`;
+            
+            // Show appropriate message
+            if (restoredPosition) {
+                statusEl.textContent = `✓ Resumed from page ${startIndex + 1} of ${chunks.length}`;
+            } else {
+                statusEl.textContent = `✓ Loaded ${chunks.length} chunks`;
+            }
             
             setTimeout(() => {
                 statusEl.textContent = '';
@@ -950,6 +1454,290 @@ class TextReels {
                 statusEl.textContent = 'Try uploading again';
             }, 5000);
         }
+    }
+
+    getChunkSizeForDensity(density) {
+        // Chunk sizes optimized for phone screens
+        switch(density) {
+            case 'less':
+                return 300; // Fewer words per page, more pages
+            case 'more':
+                return 800; // More words per page, fewer pages
+            case 'medium':
+            default:
+                return 500; // Balanced
+        }
+    }
+
+    changeTextDensity(newDensity) {
+        if (!this.originalChapters || !this.parser) {
+            console.warn('No EPUB loaded. Cannot change density.');
+            return;
+        }
+
+        if (!['less', 'medium', 'more'].includes(newDensity)) {
+            console.warn('Invalid density:', newDensity);
+            return;
+        }
+
+        // Save current reading position - try to maintain same content
+        const currentChunk = textChunks[this.currentIndex];
+        if (!currentChunk) {
+            console.warn('No current chunk found');
+            return;
+        }
+        
+        // Calculate relative position (percentage through the book)
+        const currentPosition = textChunks.length > 1 
+            ? this.currentIndex / (textChunks.length - 1) 
+            : 0;
+        const currentChapterIndex = currentChunk.chapterIndex;
+        
+        // Get a unique text snippet from current chunk for matching (first 200 chars, or a sentence)
+        const currentChunkText = currentChunk.text;
+        const textSnippet = this.extractTextSnippet(currentChunkText, 200);
+        
+        // Get new chunk size
+        const newChunkSize = this.getChunkSizeForDensity(newDensity);
+        
+        // Re-chunk the text
+        const newChunks = this.parser.chunkText(this.originalChapters, newChunkSize);
+        
+        if (newChunks.length === 0) {
+            console.error('Failed to re-chunk text');
+            return;
+        }
+
+        // Strategy 1: Try to find exact text match (best method)
+        let newIndex = -1;
+        if (textSnippet && textSnippet.length > 50) {
+            // Try to find chunk containing this text snippet
+            for (let i = 0; i < newChunks.length; i++) {
+                if (newChunks[i].text.includes(textSnippet)) {
+                    newIndex = i;
+                    break;
+                }
+            }
+        }
+        
+        // Strategy 2: If no exact match, use relative position within same chapter
+        if (newIndex === -1 && currentChapterIndex !== undefined) {
+            const currentChapterChunks = textChunks.filter(ch => ch.chapterIndex === currentChapterIndex);
+            if (currentChapterChunks.length > 0) {
+                const positionInChapter = currentChapterChunks.findIndex(ch => ch.id === currentChunk.id);
+                const relativePositionInChapter = positionInChapter >= 0 
+                    ? positionInChapter / Math.max(currentChapterChunks.length - 1, 1)
+                    : 0;
+                
+                const newChapterChunks = newChunks.filter(ch => ch.chapterIndex === currentChapterIndex);
+                if (newChapterChunks.length > 0) {
+                    const targetIndexInChapter = Math.round(relativePositionInChapter * (newChapterChunks.length - 1));
+                    const targetChunk = newChapterChunks[targetIndexInChapter];
+                    newIndex = newChunks.indexOf(targetChunk);
+                }
+            }
+        }
+        
+        // Strategy 3: Fallback to relative position in entire book (maintains percentage)
+        if (newIndex === -1) {
+            newIndex = Math.round(currentPosition * (newChunks.length - 1));
+        }
+        
+        // Ensure index is valid
+        newIndex = Math.max(0, Math.min(newIndex, newChunks.length - 1));
+
+        // Update chunks
+        textChunks.length = 0;
+        textChunks.push(...newChunks);
+        
+        // Update density
+        this.currentDensity = newDensity;
+        localStorage.setItem('pageup-text-density', newDensity);
+        
+        // Update UI
+        this.updateDensityButtons();
+        
+        // Re-render with new chunks
+        this.currentIndex = Math.min(newIndex, newChunks.length - 1);
+        this.renderReels();
+        this.updateProgress();
+        this.updateChapterIndicator();
+        
+        // Track page view with new density
+        this.analyticsTracker.startPage(this.currentIndex, this.currentDensity);
+    }
+
+    extractTextSnippet(text, maxLength = 200) {
+        if (!text || text.length === 0) return '';
+        
+        // Try to get a complete sentence if possible
+        const sentences = text.match(/[^.!?]+[.!?]+[\])'"`'"]*\s*|.+$/g);
+        if (sentences && sentences.length > 0) {
+            let snippet = '';
+            for (const sentence of sentences) {
+                if (snippet.length + sentence.length <= maxLength) {
+                    snippet += sentence;
+                } else {
+                    break;
+                }
+            }
+            if (snippet.trim().length > 50) {
+                return snippet.trim();
+            }
+        }
+        
+        // Fallback: get first maxLength characters, but try to end at word boundary
+        if (text.length <= maxLength) {
+            return text;
+        }
+        
+        const truncated = text.substring(0, maxLength);
+        const lastSpace = truncated.lastIndexOf(' ');
+        if (lastSpace > maxLength * 0.7) {
+            return truncated.substring(0, lastSpace).trim();
+        }
+        
+        return truncated.trim();
+    }
+
+    updateDensityButtons() {
+        const buttons = document.querySelectorAll('.density-btn');
+        buttons.forEach(btn => {
+            if (btn.dataset.density === this.currentDensity) {
+                btn.classList.add('active');
+            } else {
+                btn.classList.remove('active');
+            }
+        });
+    }
+
+    toggleDensityControl() {
+        const control = document.getElementById('density-control');
+        if (!control) return;
+        
+        if (control.classList.contains('hidden')) {
+            control.classList.remove('hidden');
+        } else {
+            control.classList.add('hidden');
+        }
+    }
+    
+    getDeviceType() {
+        return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+            ? 'mobile'
+            : 'desktop';
+    }
+    
+    async submitSessionData(sessionData) {
+        if (!this.googleFormId) {
+            console.warn('Google Form ID not configured');
+            return false;
+        }
+        
+        const formUrl = `https://docs.google.com/forms/d/e/${this.googleFormId}/formResponse`;
+        
+        // Build form data
+        const formData = new FormData();
+        formData.append(this.googleFormEntryIds.sessionId, sessionData.sessionId);
+        formData.append(this.googleFormEntryIds.sessionStartTimestamp, sessionData.sessionStartTimestamp);
+        formData.append(this.googleFormEntryIds.sessionEndTimestamp, sessionData.sessionEndTimestamp);
+        formData.append(this.googleFormEntryIds.totalPagesRead, sessionData.totalPagesRead.toString());
+        formData.append(this.googleFormEntryIds.lastPageIndex, sessionData.lastPageIndex.toString());
+        formData.append(this.googleFormEntryIds.totalPages, sessionData.totalPages.toString());
+        formData.append(this.googleFormEntryIds.progressPercentage, sessionData.progressPercentage.toString());
+        formData.append(this.googleFormEntryIds.averageTimePerPage, sessionData.averageTimePerPage.toString());
+        formData.append(this.googleFormEntryIds.totalTimeSpentReading, sessionData.totalTimeSpentReading.toString());
+        formData.append(this.googleFormEntryIds.lastPageSizeSetting, sessionData.lastPageSizeSetting);
+        formData.append(this.googleFormEntryIds.timeSpentInLess, sessionData.timeSpentInLess.toString());
+        formData.append(this.googleFormEntryIds.timeSpentInMedium, sessionData.timeSpentInMedium.toString());
+        formData.append(this.googleFormEntryIds.timeSpentInMore, sessionData.timeSpentInMore.toString());
+        formData.append(this.googleFormEntryIds.deviceType, this.getDeviceType());
+        
+        try {
+            // Submit via fetch (works without login, in incognito)
+            const response = await fetch(formUrl, {
+                method: 'POST',
+                mode: 'no-cors', // Important: prevents CORS issues
+                body: formData
+            });
+            
+            // With no-cors, we can't read response, but submission should work
+            return true;
+        } catch (error) {
+            console.error('Failed to submit analytics:', error);
+            return false;
+        }
+    }
+    
+    async handleDoneReading() {
+        if (!this.currentEpubIdentifier || textChunks.length === 0) {
+            this.showConfirmation('No reading session to save.');
+            return;
+        }
+        
+        // End current page tracking
+        this.analyticsTracker.startPage(this.currentIndex, this.currentDensity); // This will finalize previous
+        
+        // Get session data
+        const sessionData = this.analyticsTracker.endSession();
+        
+        // Submit to Google Forms
+        const submitted = await this.submitSessionData(sessionData);
+        
+        // Save locally as backup
+        StorageManager.saveAnalytics(this.currentEpubIdentifier, sessionData);
+        
+        // Show confirmation (always show, even if submission failed silently)
+        this.showConfirmation('Thanks! Your anonymous reading session has been saved.');
+        
+        // Reset tracker for potential new session
+        this.analyticsTracker.reset();
+    }
+    
+    showConfirmation(message) {
+        // Remove existing confirmation if any
+        const existing = document.getElementById('session-confirmation');
+        if (existing) {
+            existing.remove();
+        }
+        
+        // Create confirmation element
+        const confirmation = document.createElement('div');
+        confirmation.id = 'session-confirmation';
+        confirmation.textContent = message;
+        confirmation.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            color: #fff;
+            padding: 20px 30px;
+            border-radius: 15px;
+            font-size: 16px;
+            z-index: 10000;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            text-align: center;
+            max-width: 80%;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        `;
+        
+        document.body.appendChild(confirmation);
+        
+        // Fade in
+        setTimeout(() => {
+            confirmation.style.opacity = '1';
+        }, 10);
+        
+        // Fade out and remove after 3 seconds
+        setTimeout(() => {
+            confirmation.style.opacity = '0';
+            setTimeout(() => {
+                confirmation.remove();
+            }, 300);
+        }, 3000);
     }
 }
 
@@ -1036,6 +1824,79 @@ document.addEventListener('DOMContentLoaded', () => {
             e.stopPropagation();
             e.preventDefault();
             reels.toggleChapterIndicator();
+        });
+    }
+    
+    // Density control handlers
+    const densityControlArea = document.getElementById('density-control-area');
+    const densityControl = document.getElementById('density-control');
+    const densityButtons = document.querySelectorAll('.density-btn');
+    
+    // Toggle density control visibility when clicking the area background (but not buttons or control)
+    if (densityControlArea) {
+        densityControlArea.addEventListener('click', (e) => {
+            // Only toggle if clicking the area background itself, not buttons or control
+            if (e.target === densityControlArea) {
+                e.stopPropagation();
+                reels.toggleDensityControl();
+            }
+        });
+        
+        densityControlArea.addEventListener('touchend', (e) => {
+            if (e.target === densityControlArea) {
+                e.stopPropagation();
+                e.preventDefault();
+                reels.toggleDensityControl();
+            }
+        });
+    }
+    
+    // Handle density button clicks - change density without toggling visibility
+    densityButtons.forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const density = btn.dataset.density;
+            if (density) {
+                reels.changeTextDensity(density);
+            }
+        });
+        
+        btn.addEventListener('touchend', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            const density = btn.dataset.density;
+            if (density) {
+                reels.changeTextDensity(density);
+            }
+        });
+    });
+    
+    // Allow clicking the control itself to toggle (but not buttons)
+    if (densityControl) {
+        densityControl.addEventListener('click', (e) => {
+            // Only toggle if clicking the control background, not buttons
+            if (e.target === densityControl) {
+                e.stopPropagation();
+                reels.toggleDensityControl();
+            }
+        });
+    }
+    
+    // Done Reading button handler
+    const doneReadingBtn = document.getElementById('done-reading-btn');
+    if (doneReadingBtn) {
+        doneReadingBtn.addEventListener('click', async () => {
+            doneReadingBtn.disabled = true;
+            await reels.handleDoneReading();
+            doneReadingBtn.disabled = false;
+        });
+        
+        doneReadingBtn.addEventListener('touchend', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            doneReadingBtn.disabled = true;
+            await reels.handleDoneReading();
+            doneReadingBtn.disabled = false;
         });
     }
     

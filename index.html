@@ -28,6 +28,7 @@
             <input type="number" id="current-page" value="1" min="1" step="1">
             <span> / </span>
             <span id="total-pages">1</span>
+            <button id="done-reading-btn" style="display: none;">Done Reading</button>
         </div>
         <div id="chapter-indicator-area">
             <div id="chapter-indicator" class="hidden">
@@ -35,6 +36,13 @@
                 <span id="current-chapter-number">1</span>
                 <span> / </span>
                 <span id="total-chapters">1</span>
+            </div>
+        </div>
+        <div id="density-control-area">
+            <div id="density-control" class="hidden">
+                <button class="density-btn" data-density="less">Less</button>
+                <button class="density-btn active" data-density="medium">Medium</button>
+                <button class="density-btn" data-density="more">More</button>
             </div>
         </div>
     </div>
