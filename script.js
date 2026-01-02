@@ -1168,7 +1168,7 @@ class TextReels {
         this.touchEndY = 0;
         this.currentDragY = 0;
         this.minSwipeDistance = 50;
-        this.threshold = 100; // Distance needed to trigger page change
+        this.threshold = 40; // Distance needed to trigger page change
         this.currentEpubIdentifier = null; // Track which EPUB is currently loaded
         this.originalChapters = null; // Store original chapters for re-chunking
         this.currentDensity = 'medium'; // Current text density: 'less', 'medium', 'more'
